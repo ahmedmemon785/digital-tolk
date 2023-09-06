@@ -2,11 +2,12 @@
 
 namespace DTApi\Http\Controllers;
 
-use DTApi\Models\Job;
-use DTApi\Http\Requests;
+use App\Http\Requests\CreateBookingRequest;
+use App\Http\Requests\UpdateBookingRequest;
 use DTApi\Models\Distance;
-use Illuminate\Http\Request;
+use DTApi\Models\Job;
 use DTApi\Repository\BookingRepository;
+use Illuminate\Http\Request;
 
 /**
  * Class BookingController
@@ -30,238 +31,246 @@ class BookingController extends Controller
     }
 
     /**
+     * Get a list of jobs for a user or all jobs for admin/superadmin.
+     *
      * @param Request $request
      * @return mixed
      */
     public function index(Request $request)
     {
-        if($user_id = $request->get('user_id')) {
-
-            $response = $this->repository->getUsersJobs($user_id);
-
+        //Its not a good approach to assign values in if and also we can use direct values if variable is not used anywhere else
+        if (!empty($request->get('user_id'))) {
+            return response($this->repository->getUsersJobs($request->get('user_id')));
+            //Here ADMIN_ROLE_ID and SUPERADMIN_ROLE_ID should be constants called from User model and there value should be set in .env file
         }
-        elseif($request->__authenticatedUser->user_type == env('ADMIN_ROLE_ID') || $request->__authenticatedUser->user_type == env('SUPERADMIN_ROLE_ID'))
-        {
-            $response = $this->repository->getAll($request);
+        if (in_array($request->__authenticatedUser->user_type, [env('ADMIN_ROLE_ID'), env('SUPERADMIN_ROLE_ID')], true)) {
+            return response($this->repository->getAll($request));
         }
-
-        return response($response);
+        //I've removed the use of variables because it was immediately used once and it is better to use direct values
+        return null;
     }
 
     /**
+     * Get a specific job by ID.
+     *
      * @param $id
      * @return mixed
      */
     public function show($id)
     {
-        $job = $this->repository->with('translatorJobRel.user')->find($id);
-
-        return response($job);
+        return response($this->repository->with('translatorJobRel.user')->find($id));
     }
 
     /**
+     * Store a new job.
+     *
      * @param Request $request
      * @return mixed
      */
-    public function store(Request $request)
+    public function store(CreateBookingRequest $request)
     {
-        $data = $request->all();
+        //Validation should be done in Request class or controller as controllers are for handling validation and response
+
+        $data = $request->validated();
 
         $response = $this->repository->store($request->__authenticatedUser, $data);
 
         return response($response);
-
     }
 
     /**
+     * Update a job.
+     *
      * @param $id
      * @param Request $request
      * @return mixed
      */
-    public function update($id, Request $request)
+    //We can bind the model directly here instead of passing id and then finding the model
+    public function update(Job $job, UpdateBookingRequest $request)
     {
-        $data = $request->all();
-        $cuser = $request->__authenticatedUser;
-        $response = $this->repository->updateJob($id, array_except($data, ['_token', 'submit']), $cuser);
+        $response = $this->repository->updateJob($job, $request->validated(), $request->__authenticatedUser);
 
         return response($response);
     }
 
     /**
+     * Store an immediate job email.
+     *
      * @param Request $request
      * @return mixed
      */
     public function immediateJobEmail(Request $request)
     {
-        $adminSenderEmail = config('app.adminemail');
-        $data = $request->all();
-
-        $response = $this->repository->storeJobEmail($data);
+        $response = $this->repository->storeJobEmail($request->all());
 
         return response($response);
     }
 
     /**
+     * Get job history for a user.
+     *
      * @param Request $request
-     * @return mixed
+     * @return mixed|null
      */
     public function getHistory(Request $request)
     {
-        if($user_id = $request->get('user_id')) {
-
-            $response = $this->repository->getUsersJobsHistory($user_id, $request);
-            return response($response);
+        if (!empty($request->get('user_id'))) {
+            return response($this->repository->getUsersJobsHistory($request->get('user_id'), $request));
         }
 
         return null;
     }
 
     /**
+     * Accept a job request.
+     *
      * @param Request $request
+     * @param bool $withId
      * @return mixed
      */
-    public function acceptJob(Request $request)
+    //This method can be used for both accepting a job with id and without id
+    public function acceptJob(Request $request, $withId = false)
     {
-        $data = $request->all();
-        $user = $request->__authenticatedUser;
-
-        $response = $this->repository->acceptJob($data, $user);
-
+        if ($withId) {
+            $response = $this->repository->acceptJobWithId($request->get('job_id'), $request->__authenticatedUser);
+        } else {
+            $response = $this->repository->acceptJob($request->all(), $request->__authenticatedUser);
+        }
         return response($response);
     }
 
+    /**
+     * Accept a job with a specific ID.
+     *
+     * @param Request $request
+     * @return mixed
+     */
     public function acceptJobWithId(Request $request)
     {
-        $data = $request->get('job_id');
-        $user = $request->__authenticatedUser;
-
-        $response = $this->repository->acceptJobWithId($data, $user);
+        $response = $this->repository->acceptJobWithId($request->get('job_id'), $request->__authenticatedUser);
 
         return response($response);
     }
 
     /**
+     * Cancel a job.
+     *
      * @param Request $request
      * @return mixed
      */
     public function cancelJob(Request $request)
     {
-        $data = $request->all();
-        $user = $request->__authenticatedUser;
-
-        $response = $this->repository->cancelJobAjax($data, $user);
+        $response = $this->repository->cancelJobAjax($request->all(), $request->__authenticatedUser);
 
         return response($response);
     }
 
     /**
+     * End a job.
+     *
      * @param Request $request
      * @return mixed
      */
     public function endJob(Request $request)
     {
-        $data = $request->all();
-
-        $response = $this->repository->endJob($data);
-
-        return response($response);
-
-    }
-
-    public function customerNotCall(Request $request)
-    {
-        $data = $request->all();
-
-        $response = $this->repository->customerNotCall($data);
-
-        return response($response);
-
+        return response($this->repository->endJob($request->all()));
     }
 
     /**
+     * Handle a customer no-show situation.
+     *
+     * @param Request $request
+     * @return mixed
+     */
+    public function customerNotCall(Request $request)
+    {
+        $response = $this->repository->customerNotCall($request->all());
+
+        return response($response);
+    }
+
+    /**
+     * Get potential jobs for a user.
+     *
      * @param Request $request
      * @return mixed
      */
     public function getPotentialJobs(Request $request)
     {
-        $data = $request->all();
-        $user = $request->__authenticatedUser;
-
-        $response = $this->repository->getPotentialJobs($user);
+        $response = $this->repository->getPotentialJobs($request->__authenticatedUser);
 
         return response($response);
     }
 
+    /**
+     * Update job distance and other details.
+     *
+     * @param Request $request
+     * @return mixed
+     */
     public function distanceFeed(Request $request)
     {
+        //This function also needs to be rewritten with separation of request tasks in request class
         $data = $request->all();
+//        $data = $request->validated(); After adding request class we can use this line instead
+        //Same work below can be done with
+        $distance = $data['distance'] ?? "";
+        $time = $data['time'] ?? "";
+        $jobId = $data['jobid'] ?? "";
+        $session = $data['session_time'] ?? "";
 
-        if (isset($data['distance']) && $data['distance'] != "") {
-            $distance = $data['distance'];
-        } else {
-            $distance = "";
-        }
-        if (isset($data['time']) && $data['time'] != "") {
-            $time = $data['time'];
-        } else {
-            $time = "";
-        }
-        if (isset($data['jobid']) && $data['jobid'] != "") {
-            $jobid = $data['jobid'];
-        }
-
-        if (isset($data['session_time']) && $data['session_time'] != "") {
-            $session = $data['session_time'];
-        } else {
-            $session = "";
-        }
 
         if ($data['flagged'] == 'true') {
-            if($data['admincomment'] == '') return "Please, add comment";
+            // Refactor Comment: Added a validation check and message for 'admincomment'.
+            if ($data['admincomment'] == '') {
+                return "Please, add comment";
+            }
             $flagged = 'yes';
         } else {
             $flagged = 'no';
         }
-        
-        if ($data['manually_handled'] == 'true') {
-            $manually_handled = 'yes';
-        } else {
-            $manually_handled = 'no';
-        }
 
-        if ($data['by_admin'] == 'true') {
-            $by_admin = 'yes';
-        } else {
-            $by_admin = 'no';
-        }
+        $manuallyHandled = ($data['manually_handled'] === 'true') ? 'yes' : 'no';
+        $byAdmin = ($data['by_admin'] === 'true') ? 'yes' : 'no';
+        $adminComment = $data['admincomment'] ?? "";
 
-        if (isset($data['admincomment']) && $data['admincomment'] != "") {
-            $admincomment = $data['admincomment'];
-        } else {
-            $admincomment = "";
-        }
+        //We could have
+        // $job = Job::find($jobid);
         if ($time || $distance) {
-
-            $affectedRows = Distance::where('job_id', '=', $jobid)->update(array('distance' => $distance, 'time' => $time));
+            // There could be a job model function updateDistance() which can be called here
+            //$job->updateDistance($distance, $time);
+            $affectedRows = Distance::where('job_id', '=', $jobId)->update(array('distance' => $distance, 'time' => $time));
         }
 
-        if ($admincomment || $session || $flagged || $manually_handled || $by_admin) {
+        if ($adminComment || $session || $flagged || $manuallyHandled || $byAdmin) {
 
-            $affectedRows1 = Job::where('id', '=', $jobid)->update(array('admin_comments' => $admincomment, 'flagged' => $flagged, 'session_time' => $session, 'manually_handled' => $manually_handled, 'by_admin' => $by_admin));
+            // There could be a job model function updateAdminComments() which can be called here
+            // $job->updateAdminComments($admincomment, $session, $flagged, $manually_handled, $by_admin);
+            $affectedRows1 = Job::where('id', '=', $jobId)->update(array('admin_comments' => $adminComment, 'flagged' => $flagged, 'session_time' => $session, 'manually_handled' => $manuallyHandled, 'by_admin' => $byAdmin));
 
         }
-
         return response('Record updated!');
     }
 
+    /**
+     * Reopen a job.
+     *
+     * @param Request $request
+     * @return mixed
+     */
     public function reopen(Request $request)
     {
-        $data = $request->all();
-        $response = $this->repository->reopen($data);
+        $response = $this->repository->reopen($request->all());
 
         return response($response);
     }
 
+    /**
+     * Resend notifications for a job.
+     *
+     * @param Request $request
+     * @return mixed
+     */
     public function resendNotifications(Request $request)
     {
         $data = $request->all();
@@ -273,7 +282,8 @@ class BookingController extends Controller
     }
 
     /**
-     * Sends SMS to Translator
+     * Resend SMS notifications for a job.
+     *
      * @param Request $request
      * @return \Illuminate\Contracts\Routing\ResponseFactory|\Symfony\Component\HttpFoundation\Response
      */
@@ -285,6 +295,7 @@ class BookingController extends Controller
 
         try {
             $this->repository->sendSMSNotificationToTranslator($job);
+            //Here response should be from base controller with necessary status code and message
             return response(['success' => 'SMS sent']);
         } catch (\Exception $e) {
             return response(['success' => $e->getMessage()]);
@@ -292,3 +303,4 @@ class BookingController extends Controller
     }
 
 }
+
